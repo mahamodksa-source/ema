@@ -7,9 +7,8 @@ import ccxt
 # =========================
 # إعدادات من متغيرات البيئة
 # =========================
-EXCHANGE = "bybit"  # نحدد البورصة Bybit
-SYMBOL = os.getenv("SYMBOL", "BTC/USDT")
-TIMEFRAME = os.getenv("TIMEFRAME", "1m")  # 1m, 5m, 15m
+EXCHANGE = "bybit"
+TIMEFRAME = os.getenv("TIMEFRAME", "1h")  # فريم الساعة
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
@@ -21,13 +20,13 @@ def send_telegram(msg):
     requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": msg})
 
 # =========================
-# CCXT Exchange (Bybit)
+# CCXT Bybit
 # =========================
 exchange = getattr(ccxt, EXCHANGE)({
     "enableRateLimit": True,
 })
 
-def get_ohlcv(symbol, timeframe="1m", limit=100):
+def get_ohlcv(symbol, timeframe="1h", limit=100):
     ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
     df = pd.DataFrame(ohlcv, columns=["time","open","high","low","close","volume"])
     df["close"] = df["close"].astype(float)
@@ -42,30 +41,39 @@ def get_orderbook(symbol, limit=50):
     return buy_volume, sell_volume
 
 # =========================
-# Check Signals
+# Check Signal per Symbol
 # =========================
-def check_signals():
-    df = get_ohlcv(SYMBOL, TIMEFRAME)
+def check_symbol(symbol):
+    df = get_ohlcv(symbol, TIMEFRAME)
     df["EMA9"] = df["close"].ewm(span=9, adjust=False).mean()
     df["EMA21"] = df["close"].ewm(span=21, adjust=False).mean()
     df["Signal"] = (df["EMA9"] > df["EMA21"]).astype(int)
     df["Cross"] = df["Signal"].diff()
 
     last_cross = df.iloc[-1]["Cross"]
-    buy_volume, sell_volume = get_orderbook(SYMBOL)
+    buy_volume, sell_volume = get_orderbook(symbol)
 
     if last_cross == 1 and buy_volume > sell_volume:
-        send_telegram(f"🚀 تقاطع EMA9 فوق EMA21 على {SYMBOL}\n📊 المشترين: {buy_volume:.2f} > البائعين: {sell_volume:.2f}")
+        send_telegram(f"🚀 تقاطع صعودي EMA9 فوق EMA21 على {symbol}\n📊 المشترين: {buy_volume:.2f} > البائعين: {sell_volume:.2f}")
     elif last_cross == -1 and sell_volume > buy_volume:
-        send_telegram(f"📉 تقاطع EMA9 تحت EMA21 على {SYMBOL}\n📊 البائعين: {sell_volume:.2f} > المشترين: {buy_volume:.2f}")
+        send_telegram(f"📉 تقاطع هبوطي EMA9 تحت EMA21 على {symbol}\n📊 البائعين: {sell_volume:.2f} > المشترين: {buy_volume:.2f}")
 
 # =========================
-# Loop
+# Main Loop
 # =========================
 if __name__ == "__main__":
     while True:
         try:
-            check_signals()
+            markets = exchange.load_markets()
+            usdt_pairs = [s for s in markets if s.endswith("/USDT")]
+
+            for symbol in usdt_pairs:
+                try:
+                    check_symbol(symbol)
+                except Exception as e:
+                    print(f"خطأ في {symbol}: {e}")
+
         except Exception as e:
-            send_telegram(f"❌ خطأ: {e}")
-        time.sleep(60)  # كل دقيقة
+            send_telegram(f"❌ خطأ رئيسي: {e}")
+
+        time.sleep(60 * 60)  # يفحص كل ساعة
